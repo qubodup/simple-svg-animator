@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Simple SVG Shape-By-Shape Animator</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+        }
+
+        input,
+        textarea,
+        button {
+            margin: 5px 0;
+            display: block;
+        }
+
+        textarea {
+            width: 100%;
+            height: 80px;
+            border: 2px dashed #ccc;
+            padding: 5px;
+            transition: border-color 0.2s;
+        }
+
+        textarea.highlight {
+            border-color: blue;
+        }
+
+        textarea.ready-to-drop {
+            border-color: yellow;
+            background-color: #ffffcc;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+            width: 100%;
+        }
+
+        .grid div {
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+
+        .grid h4 {
+            margin: 0 0 10px 0;
+            text-align: center;
+        }
+
+        .grid svg {
+            width: 100%;
+            height: auto;
+        }
+
+        #container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <h2>Simple SVG Shape-By-Shape Animator</h2>
+        <input type="file" id="fileInput" accept=".svg">
+        <textarea id="svgInput" placeholder="Drop SVG here or paste SVG code"></textarea>
+        <label>FPS: <input type="number" id="fpsInput" value="60"></label>
+        <label>Loop pause (ms): <input type="number" id="loopPauseInput" value="500"></label>
+        <label>Ping-pong pause (ms): <input type="number" id="pingpongPauseInput" value="250"></label>
+        <button id="animateBtn">Animate!</button>
+        <button id="resetBtn" disabled>Reset</button>
+        <div class="grid" id="outputGrid"></div>
+    </div>
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const svgInput = document.getElementById('svgInput');
+        const fpsInput = document.getElementById('fpsInput');
+        const loopPauseInput = document.getElementById('loopPauseInput');
+        const pingpongPauseInput = document.getElementById('pingpongPauseInput');
+        const animateBtn = document.getElementById('animateBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const outputGrid = document.getElementById('outputGrid');
+
+        function resetPage() {
+            svgInput.value = '';
+            fpsInput.value = 60;
+            loopPauseInput.value = 500;
+            pingpongPauseInput.value = 250;
+            outputGrid.innerHTML = '';
+            resetBtn.disabled = true;
+        }
+        resetBtn.addEventListener('click', resetPage);
+
+        // Enable reset when inputs change
+        ['input', 'change'].forEach(ev => {
+            [svgInput, fpsInput, loopPauseInput, pingpongPauseInput, fileInput].forEach(el => {
+                el.addEventListener(ev, () => resetBtn.disabled = false);
+            });
+        });
+
+        // File select
+        fileInput.addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (file && file.type.includes('svg')) {
+                const reader = new FileReader();
+                reader.onload = evt => svgInput.value = evt.target.result;
+                reader.readAsText(file);
+            }
+        });
+
+        // Global drag highlight
+        document.addEventListener('dragover', e => {
+            e.preventDefault();
+            svgInput.classList.add('highlight');
+        });
+        document.addEventListener('dragleave', e => {
+            if (e.target === document || e.pageX === 0 || e.pageY === 0) {
+                svgInput.classList.remove('highlight');
+            }
+        });
+        document.addEventListener('drop', e => {
+            e.preventDefault();
+            svgInput.classList.remove('highlight');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.includes('svg')) {
+                const reader = new FileReader();
+                reader.onload = evt => svgInput.value = evt.target.result;
+                reader.readAsText(file);
+            }
+        });
+
+        // Target highlight
+        svgInput.addEventListener('dragenter', () => svgInput.classList.add('ready-to-drop'));
+        svgInput.addEventListener('dragleave', () => svgInput.classList.remove('ready-to-drop'));
+        svgInput.addEventListener('drop', () => svgInput.classList.remove('ready-to-drop'));
+
+        // Helpers
+        function parseShapes(doc) {
+            const selectors = ['circle', 'ellipse', 'line', 'path', 'polygon', 'polyline', 'rect'];
+            return Array.from(doc.querySelectorAll(selectors.join(',')));
+        }
+        function ensureIds(shapes) {
+            shapes.forEach((s, i) => { if (!s.id) s.id = 'shape_' + i; });
+        }
+
+        function addAnimation(doc, shapes, mode, fps, loopPause, pingPause) {
+            const frame = +(1000 / fps).toFixed(3);
+            const forwardFrames = shapes.length;
+            const reverseFrames = mode.includes('pingpong') ? shapes.length - 2 : 0;
+
+            const pingPauseFrames = mode.includes('pingpong') ? Math.round(pingPause / frame) : 0;
+            const loopPauseFrames = Math.round(loopPause / frame);
+
+            const totalFrames = forwardFrames + reverseFrames + pingPauseFrames + loopPauseFrames;
+
+            shapes.forEach((s, i) => s.setAttribute('visibility', i === 0 ? 'visible' : 'hidden'));
+
+            shapes.forEach((s, i) => {
+                let values = [];
+                let keyTimes = [];
+                let frameIndex = 0;
+                let lastValue = null;
+
+                function pushValueIfChanged(val, force = false) {
+                    if (val !== lastValue || force) {
+                        values.push(val);
+                        keyTimes.push(frameIndex / totalFrames);
+                        lastValue = val;
+                    }
+                    frameIndex++;
+                }
+
+                // Forward pass
+                for (let f = 0; f < forwardFrames; f++) {
+                    let visibleCount = mode.startsWith('add') ? f + 1 : 1;
+                    let visible = mode.startsWith('add') ? (i < visibleCount) : (f === i);
+                    pushValueIfChanged(visible ? 'visible' : 'hidden');
+                }
+
+                // Ping-pong pause at peak
+                for (let p = 0; p < pingPauseFrames; p++) {
+                    pushValueIfChanged(values[values.length - 1]);
+                }
+
+                // Reverse pass for pingpong
+                if (mode.includes('pingpong')) {
+                    for (let f = reverseFrames; f >= 0; f--) {
+                        let visibleCount = mode.startsWith('add') ? f + 1 : 1;
+                        let visible = mode.startsWith('add') ? (i < visibleCount) : (f === i);
+                        pushValueIfChanged(visible ? 'visible' : 'hidden');
+                    }
+                }
+
+                // Loop pause at start before repeating
+                for (let p = 0; p < loopPauseFrames; p++) {
+                    pushValueIfChanged(values[values.length - 1]);
+                }
+
+                // Ensure last keyTime is always pushed at 1 (even if value didn't change)
+                frameIndex = totalFrames;
+                if (keyTimes[keyTimes.length - 1] !== 1) {
+                    pushValueIfChanged(values[values.length - 1], true);
+                } else {
+                    keyTimes[keyTimes.length - 1] = 1; // just normalize
+                }
+
+                const anim = document.createElementNS("http://www.w3.org/2000/svg", "animate");
+                anim.setAttribute('attributeName', 'visibility');
+                anim.setAttribute('dur', (frame * totalFrames) + 'ms');
+                anim.setAttribute('repeatCount', 'indefinite');
+                anim.setAttribute('values', values.join(';'));
+                anim.setAttribute('keyTimes', keyTimes.join(';'));
+                s.appendChild(anim);
+            });
+
+        }
+
+
+        function serializeSVG(doc) {
+            return new XMLSerializer().serializeToString(doc.documentElement);
+        }
+        function downloadSVG(svgText, name) {
+            const blob = new Blob([svgText], { type: 'image/svg+xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = name;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        animateBtn.addEventListener('click', () => {
+            const svgCode = svgInput.value.trim();
+            if (!svgCode) { alert("Error: No SVG input."); return; }
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(svgCode, "image/svg+xml");
+            const shapes = parseShapes(doc);
+            if (shapes.length <= 1) { alert("Error: SVG must contain at least 2 shapes."); return; }
+            ensureIds(shapes);
+            const fps = +fpsInput.value, loopPause = +loopPauseInput.value, pingPause = +pingpongPauseInput.value;
+            const methods = ['replace', 'replace-pingpong', 'add', 'add-pingpong'];
+            outputGrid.innerHTML = '';
+            methods.forEach(m => {
+                const cloned = doc.cloneNode(true);
+                addAnimation(cloned, parseShapes(cloned), m, fps, loopPause, pingPause);
+                const svgText = serializeSVG(cloned);
+                const div = document.createElement('div');
+                const label = document.createElement('h4');
+                label.textContent = m;
+                div.appendChild(label);
+                div.innerHTML += svgText;
+                const btn = document.createElement('button');
+                const now = new Date();
+                const timestamp = now.toISOString().replace(/[:T]/g, '_').split('.')[0];
+                btn.textContent = "Download";
+                btn.onclick = () => downloadSVG(svgText, `animated-${m}-${timestamp}.svg`);
+                div.appendChild(btn);
+                outputGrid.appendChild(div);
+            });
+        });
+    </script>
+</body>
+
+</html>
